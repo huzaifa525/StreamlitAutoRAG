@@ -134,16 +134,13 @@ class LocalAutoRAGOptimizer:
         self.embedding_model = "Intel/dynamic_tinybert"
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.embedding_model,
-            model_kwargs={
-                'device': 'cpu',
-                'token': HF_TOKEN
-            },
+            model_kwargs={'device': 'cpu'},  # Removed token parameter
             encode_kwargs={'normalize_embeddings': True}
         )
         
         self.encoder = SentenceTransformer(
             self.embedding_model,
-            token=HF_TOKEN
+            token=HF_TOKEN  # Keep token here as SentenceTransformer accepts it
         )
         
     def evaluate_chunks(self, text: str, chunk_size: int, overlap: int) -> float:
@@ -183,17 +180,20 @@ class LocalAutoRAGOptimizer:
 
 class LocalAutoRAGSystem:
     def __init__(self, model_path: str):
-        self.optimizer = LocalAutoRAGOptimizer()
-        self.vectorstore = None
-        
-        self.llm = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            model_type="llama",
-            max_new_tokens=512,
-            context_length=2048,
-            gpu_layers=0,
-            token=HF_TOKEN
-        )
+        try:
+            self.optimizer = LocalAutoRAGOptimizer()
+            self.vectorstore = None
+            
+            # Removed token parameter from model initialization
+            self.llm = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                model_type="llama",
+                max_new_tokens=512,
+                context_length=2048,
+                gpu_layers=0
+            )
+        except Exception as e:
+            raise Exception(f"Failed to initialize AutoRAG system: {str(e)}")
         
     def process_document(self, text: str):
         chunk_size, overlap = self.optimizer.optimize_parameters(text)
@@ -284,8 +284,9 @@ def main():
         
     try:
         autorag = LocalAutoRAGSystem(model_path)
+        st.success("AutoRAG system initialized successfully!")
     except Exception as e:
-        st.error(f"Error initializing LLM: {str(e)}")
+        st.error(f"Error initializing AutoRAG system: {str(e)}")
         return
     
     uploaded_file = st.file_uploader(
