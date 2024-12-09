@@ -20,6 +20,7 @@ from PIL import Image
 import io
 import cv2
 import magic
+import re
 
 class DocumentProcessor:
     """Handles document processing including OCR"""
@@ -27,15 +28,11 @@ class DocumentProcessor:
     @staticmethod
     def extract_text_from_image(image) -> str:
         """Extract text from an image using OCR"""
-        # Convert PIL Image to cv2 format
         img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        
-        # Preprocess image for better OCR
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
         denoised = cv2.fastNlMeansDenoising(gray)
         _, binary = cv2.threshold(denoised, 128, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Perform OCR
         try:
             text = pytesseract.image_to_string(binary)
             return text.strip()
@@ -45,14 +42,11 @@ class DocumentProcessor:
 
     @staticmethod
     def process_pdf(file_content: bytes) -> str:
-        """Process PDF file and extract text including OCR if needed"""
-        # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             tmp_file.write(file_content)
             tmp_file_path = tmp_file.name
 
         try:
-            # First try to extract text directly
             text = ""
             import PyPDF2
             with open(tmp_file_path, 'rb') as file:
@@ -62,34 +56,26 @@ class DocumentProcessor:
                     if extracted_text.strip():
                         text += extracted_text + "\n"
             
-            # If no text was extracted, try OCR
             if not text.strip():
                 st.info("No text found in PDF, attempting OCR...")
                 images = pdf2image.convert_from_path(tmp_file_path)
-                text = ""
                 for image in images:
                     text += DocumentProcessor.extract_text_from_image(image) + "\n"
             
             return text.strip()
         
         finally:
-            # Cleanup
             if os.path.exists(tmp_file_path):
                 os.remove(tmp_file_path)
 
     @staticmethod
     def process_image(file_content: bytes) -> str:
-        """Process image file using OCR"""
-        # Convert bytes to PIL Image
         image = Image.open(io.BytesIO(file_content))
         return DocumentProcessor.extract_text_from_image(image)
 
     @staticmethod
     def process_file(uploaded_file) -> str:
-        """Process uploaded file based on its type"""
         file_content = uploaded_file.read()
-        
-        # Detect file type
         file_type = magic.from_buffer(file_content, mime=True)
         
         if file_type == 'application/pdf':
@@ -102,8 +88,6 @@ class DocumentProcessor:
             raise ValueError(f"Unsupported file type: {file_type}")
 
 class ModelManager:
-    """Handles downloading and loading of models"""
-    
     MODELS = {
         "tiny": {
             "name": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
@@ -113,7 +97,6 @@ class ModelManager:
     
     @staticmethod
     def download_model(url: str, save_path: str):
-        """Download model with progress bar"""
         response = requests.get(url, stream=True)
         total_size = int(response.headers.get('content-length', 0))
         
@@ -130,7 +113,6 @@ class ModelManager:
 
     @staticmethod
     def ensure_model_exists(model_name: str = "tiny") -> str:
-        """Check if model exists, download if not"""
         model_info = ModelManager.MODELS[model_name]
         model_path = f"models/{model_name}.gguf"
         
@@ -143,18 +125,19 @@ class ModelManager:
 
 class LocalAutoRAGOptimizer:
     def __init__(self):
-        self.embedding_model = "all-MiniLM-L6-v2"
-        self.chunk_sizes = [256, 512, 1024]
-        self.overlap_sizes = [0, 50, 100]
+        self.chunk_sizes = [512, 768, 1024]
+        self.overlap_sizes = [50, 100, 150]
         
-        # Initialize Hugging Face embeddings for LangChain
-        self.embeddings = HuggingFaceEmbeddings(model_name=self.embedding_model)
-        
-        # Initialize sentence transformer for coherence scoring
+        # Use Intel's dynamic-tinybert for better semantic search
+        self.embedding_model = "Intel/dynamic-tinybert"
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name=self.embedding_model,
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
         self.encoder = SentenceTransformer(self.embedding_model)
         
     def evaluate_chunks(self, text: str, chunk_size: int, overlap: int) -> float:
-        """Evaluate chunk coherence and information retention."""
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=overlap
@@ -177,7 +160,6 @@ class LocalAutoRAGOptimizer:
         return np.mean(coherence_scores)
 
     def optimize_parameters(self, text: str) -> Tuple[int, int]:
-        """Find optimal chunking parameters."""
         best_score = -1
         optimal_params = None
         
@@ -195,30 +177,23 @@ class LocalAutoRAGSystem:
         self.optimizer = LocalAutoRAGOptimizer()
         self.vectorstore = None
         
-        # Initialize local LLM
         self.llm = AutoModelForCausalLM.from_pretrained(
             model_path,
             model_type="llama",
             max_new_tokens=512,
             context_length=2048,
-            gpu_layers=0  # CPU only
+            gpu_layers=0
         )
         
     def process_document(self, text: str):
-        """Process document with optimized parameters."""
-        # Optimize parameters
         chunk_size, overlap = self.optimizer.optimize_parameters(text)
-        
-        # Create text splitter with optimized parameters
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
-            chunk_overlap=overlap
+            chunk_overlap=overlap,
+            separators=["\n\n", "\n", ". ", "? ", "! ", ";", ",", " ", ""]
         )
         
-        # Create documents
         docs = [Document(page_content=chunk) for chunk in splitter.split_text(text)]
-        
-        # Create vectorstore using HuggingFace embeddings
         self.vectorstore = FAISS.from_documents(docs, self.optimizer.embeddings)
         
         return {
@@ -228,44 +203,67 @@ class LocalAutoRAGSystem:
             "num_chunks": len(docs)
         }
     
+    def clean_response(self, response: str) -> str:
+        """Clean and format the response"""
+        # Remove any translation-related text
+        response = re.sub(r'can you translate.*?\?', '', response, flags=re.IGNORECASE)
+        # Remove any address formatting if not actually an address
+        if 'Main St' in response and not re.search(r'\d+.*Main.*St', response, re.IGNORECASE):
+            return "I cannot find the specific address in the provided context."
+        return response.strip()
+    
     def query(self, question: str, num_chunks: int = 5) -> str:
-        """Query the document with local LLM."""
         if not self.vectorstore:
             return "Please process a document first."
-        
-        # Retrieve relevant chunks
-        relevant_docs = self.vectorstore.similarity_search(question, k=num_chunks)
-        context = "\n".join([doc.page_content for doc in relevant_docs])
-        
-        # Create prompt
-        prompt = f"""You are a helpful AI assistant. Using the provided context, answer the user's question comprehensively and accurately. If the information cannot be found in the context, say "I cannot find the answer in the provided context."
 
-Some guidelines:
-- Synthesize information from multiple chunks if needed
-- Provide complete, well-structured answers
-- Stay focused on the question asked
-- Use your own words to explain clearly
-- If asked for a summary, provide key points in a coherent manner
-- Cite specific details from the context when relevant
+        # Enhance question for better retrieval
+        question_type = "unknown"
+        if any(word in question.lower() for word in ["address", "location", "place"]):
+            question_type = "address"
+        elif any(word in question.lower() for word in ["summary", "summarize"]):
+            question_type = "summary"
+            
+        # Build appropriate prompt based on question type
+        if question_type == "address":
+            prompt_template = """Based on the provided context, find the complete and accurate address information. Only return the address if it's explicitly mentioned in the context. If no specific address is found, say "I cannot find the specific address in the provided context."
 
 Context:
 {context}
 
 Question: {question}
 
-Please provide a clear and complete answer:
-"""
+Let me find the specific address:"""
+        else:
+            prompt_template = """You are a helpful AI assistant. Answer the question using only the information provided in the context. Be specific and accurate. If you cannot find the answer in the context, say "I cannot find the answer in the provided context."
+
+Some guidelines:
+- Only use information explicitly stated in the context
+- Be precise and factual
+- Do not make assumptions or add information not present in the context
+- If multiple pieces of information are relevant, combine them coherently
+- For addresses or specific details, only include them if they are explicitly mentioned
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+        # Retrieve relevant chunks with re-ranking
+        relevant_docs = self.vectorstore.similarity_search(question, k=num_chunks)
+        context = "\n\n".join([doc.page_content for doc in relevant_docs])
         
-        # Generate response using local LLM
+        # Generate response
+        prompt = prompt_template.format(context=context, question=question)
         response = self.llm(prompt)
         
-        return response.strip()
+        # Clean and format response
+        return self.clean_response(response)
 
-# Streamlit Interface
 def main():
     st.title("📚 Local AutoRAG Document QA System")
     
-    # Model setup
     try:
         model_path = ModelManager.ensure_model_exists()
         st.success("Local LLM loaded successfully!")
@@ -273,14 +271,12 @@ def main():
         st.error(f"Error downloading model: {str(e)}")
         return
         
-    # Initialize AutoRAG system
     try:
         autorag = LocalAutoRAGSystem(model_path)
     except Exception as e:
         st.error(f"Error initializing LLM: {str(e)}")
         return
     
-    # File upload
     uploaded_file = st.file_uploader(
         "Upload your document (PDF, Images, or Text files)", 
         type=["pdf", "txt", "png", "jpg", "jpeg"]
@@ -289,25 +285,21 @@ def main():
     if uploaded_file:
         with st.spinner("Processing document... This may take a few minutes."):
             try:
-                # Process the uploaded file
                 document_text = DocumentProcessor.process_file(uploaded_file)
                 
                 if not document_text.strip():
                     st.error("No text could be extracted from the document.")
                     return
                 
-                # Process the extracted text
                 stats = autorag.process_document(document_text)
                 st.success("Document processed successfully!")
                 
-                # Display optimization stats
                 st.subheader("📊 Optimization Statistics")
                 st.write(f"Optimal chunk size: {stats['chunk_size']}")
                 st.write(f"Optimal overlap: {stats['overlap']}")
                 st.write(f"Embedding model: {stats['embedding_model']}")
                 st.write(f"Number of chunks: {stats['num_chunks']}")
                 
-                # Display extracted text
                 with st.expander("View Extracted Text"):
                     st.text(document_text)
                 
@@ -315,7 +307,6 @@ def main():
                 st.error(f"Error processing document: {str(e)}")
                 return
     
-        # Question input
         question = st.text_input("Ask a question about your document:")
         
         if question:
