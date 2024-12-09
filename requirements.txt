@@ -1,5 +1,5 @@
 streamlit>=1.24.0
-llama-cpp-python>=0.2.11
+ctransformers>=0.2.24
 sentence-transformers>=2.2.2
 langchain>=0.0.330
 torch>=2.0.0
