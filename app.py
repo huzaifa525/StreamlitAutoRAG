@@ -3,7 +3,6 @@ from ctransformers import AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
-from langchain.document_loaders import PyPDFLoader, TextLoader
 import torch
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -11,6 +10,94 @@ from typing import List, Tuple, Dict
 import os
 import requests
 from tqdm import tqdm
+import tempfile
+from pathlib import Path
+import pdf2image
+import pytesseract
+from PIL import Image
+import io
+import cv2
+import magic
+
+class DocumentProcessor:
+    """Handles document processing including OCR"""
+    
+    @staticmethod
+    def extract_text_from_image(image) -> str:
+        """Extract text from an image using OCR"""
+        # Convert PIL Image to cv2 format
+        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Preprocess image for better OCR
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        denoised = cv2.fastNlMeansDenoising(gray)
+        _, binary = cv2.threshold(denoised, 128, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Perform OCR
+        try:
+            text = pytesseract.image_to_string(binary)
+            return text.strip()
+        except Exception as e:
+            st.warning(f"OCR failed for an image: {str(e)}")
+            return ""
+
+    @staticmethod
+    def process_pdf(file_content: bytes) -> str:
+        """Process PDF file and extract text including OCR if needed"""
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(file_content)
+            tmp_file_path = tmp_file.name
+
+        try:
+            # First try to extract text directly
+            text = ""
+            import PyPDF2
+            with open(tmp_file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    extracted_text = page.extract_text()
+                    if extracted_text.strip():
+                        text += extracted_text + "\n"
+            
+            # If no text was extracted, try OCR
+            if not text.strip():
+                st.info("No text found in PDF, attempting OCR...")
+                images = pdf2image.convert_from_path(tmp_file_path)
+                text = ""
+                for image in images:
+                    text += DocumentProcessor.extract_text_from_image(image) + "\n"
+            
+            return text.strip()
+        
+        finally:
+            # Cleanup
+            if os.path.exists(tmp_file_path):
+                os.remove(tmp_file_path)
+
+    @staticmethod
+    def process_image(file_content: bytes) -> str:
+        """Process image file using OCR"""
+        # Convert bytes to PIL Image
+        image = Image.open(io.BytesIO(file_content))
+        return DocumentProcessor.extract_text_from_image(image)
+
+    @staticmethod
+    def process_file(uploaded_file) -> str:
+        """Process uploaded file based on its type"""
+        file_content = uploaded_file.read()
+        
+        # Detect file type
+        file_type = magic.from_buffer(file_content, mime=True)
+        
+        if file_type == 'application/pdf':
+            return DocumentProcessor.process_pdf(file_content)
+        elif file_type.startswith('image/'):
+            return DocumentProcessor.process_image(file_content)
+        elif file_type.startswith('text/'):
+            return file_content.decode('utf-8')
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
 
 class ModelManager:
     """Handles downloading and loading of models"""
@@ -54,12 +141,9 @@ class ModelManager:
 
 class LocalAutoRAGOptimizer:
     def __init__(self):
-        # Use lightweight embedding model
         self.embedding_model = "all-MiniLM-L6-v2"
         self.chunk_sizes = [256, 512, 1024]
         self.overlap_sizes = [0, 50, 100]
-        
-        # Initialize sentence transformer
         self.encoder = SentenceTransformer(self.embedding_model)
         
     def evaluate_chunks(self, text: str, chunk_size: int, overlap: int) -> float:
@@ -73,7 +157,6 @@ class LocalAutoRAGOptimizer:
         if len(chunks) < 2:
             return 0.0
             
-        # Calculate coherence between adjacent chunks
         coherence_scores = []
         embeddings = self.encoder.encode(chunks)
         
@@ -114,27 +197,17 @@ class LocalAutoRAGSystem:
             gpu_layers=0  # CPU only
         )
         
-    def process_document(self, file_path: str):
+    def process_document(self, text: str):
         """Process document with optimized parameters."""
-        # Load document
-        if file_path.endswith('.pdf'):
-            loader = PyPDFLoader(file_path)
-        else:
-            loader = TextLoader(file_path)
-        document = loader.load()
-        
-        # Get full text
-        full_text = " ".join([doc.page_content for doc in document])
-        
         # Optimize parameters
-        chunk_size, overlap = self.optimizer.optimize_parameters(full_text)
+        chunk_size, overlap = self.optimizer.optimize_parameters(text)
         
         # Create text splitter with optimized parameters
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=overlap
         )
-        splits = splitter.split_documents(document)
+        splits = splitter.create_documents([text])
         
         # Create embeddings and vectorstore
         self.vectorstore = FAISS.from_documents(
@@ -193,16 +266,23 @@ def main():
         return
     
     # File upload
-    uploaded_file = st.file_uploader("Upload your document (PDF or TXT)", type=["pdf", "txt"])
+    uploaded_file = st.file_uploader(
+        "Upload your document (PDF, Images, or Text files)", 
+        type=["pdf", "txt", "png", "jpg", "jpeg"]
+    )
     
     if uploaded_file:
-        # Save uploaded file temporarily
-        with open("temp_doc", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
         with st.spinner("Processing document... This may take a few minutes."):
             try:
-                stats = autorag.process_document("temp_doc")
+                # Process the uploaded file
+                document_text = DocumentProcessor.process_file(uploaded_file)
+                
+                if not document_text.strip():
+                    st.error("No text could be extracted from the document.")
+                    return
+                
+                # Process the extracted text
+                stats = autorag.process_document(document_text)
                 st.success("Document processed successfully!")
                 
                 # Display optimization stats
@@ -212,13 +292,13 @@ def main():
                 st.write(f"Embedding model: {stats['embedding_model']}")
                 st.write(f"Number of chunks: {stats['num_chunks']}")
                 
+                # Display extracted text
+                with st.expander("View Extracted Text"):
+                    st.text(document_text)
+                
             except Exception as e:
                 st.error(f"Error processing document: {str(e)}")
                 return
-            finally:
-                # Clean up temporary file
-                if os.path.exists("temp_doc"):
-                    os.remove("temp_doc")
     
         # Question input
         question = st.text_input("Ask a question about your document:")
