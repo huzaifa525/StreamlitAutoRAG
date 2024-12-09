@@ -91,9 +91,9 @@ class DocumentProcessor:
 
 class ModelManager:
     MODELS = {
-        "tiny": {
-            "name": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
-            "url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+        "deepseek": {
+            "name": "TheBloke/deepseek-coder-6.7B-base-GGUF",
+            "url": "https://huggingface.co/TheBloke/deepseek-coder-6.7B-base-GGUF/resolve/main/deepseek-coder-6.7b-base.Q4_K_M.gguf"
         }
     }
     
@@ -115,7 +115,7 @@ class ModelManager:
                 progress.update(size)
 
     @staticmethod
-    def ensure_model_exists(model_name: str = "tiny") -> str:
+    def ensure_model_exists(model_name: str = "deepseek") -> str:
         model_info = ModelManager.MODELS[model_name]
         model_path = f"models/{model_name}.gguf"
         
@@ -187,10 +187,13 @@ class LocalAutoRAGSystem:
             # Removed token parameter from model initialization
             self.llm = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                model_type="llama",
-                max_new_tokens=512,
-                context_length=2048,
-                gpu_layers=0
+                model_type="deepseek",
+                max_new_tokens=1024,  # Increased for DeepSeek
+                context_length=4096,  # Increased context window
+                gpu_layers=0,
+                top_k=10,
+                top_p=0.95,
+                temperature=0.7
             )
         except Exception as e:
             raise Exception(f"Failed to initialize AutoRAG system: {str(e)}")
