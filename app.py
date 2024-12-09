@@ -187,7 +187,7 @@ class LocalAutoRAGSystem:
             # Removed token parameter from model initialization
             self.llm = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                model_type="gpt2",  # Using generic transformer type for SmolLM2
+                model_type="SmolLM2",  # Using generic transformer type for SmolLM2
                 max_new_tokens=768,
                 context_length=2048,
                 gpu_layers=0,
