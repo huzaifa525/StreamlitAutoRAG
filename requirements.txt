@@ -9,3 +9,4 @@ faiss-cpu>=1.7.4
 tqdm>=4.65.0
 PyPDF2>=3.0.0
 requests>=2.31.0
+langchain-community
