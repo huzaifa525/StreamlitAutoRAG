@@ -187,11 +187,11 @@ class LocalAutoRAGSystem:
             # Removed token parameter from model initialization
             self.llm = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                model_type="deepseek",
-                max_new_tokens=1024,  # Increased for DeepSeek
-                context_length=4096,  # Increased context window
+                model_type="llama",  # SmolLM2 uses llama architecture
+                max_new_tokens=768,
+                context_length=2048,
                 gpu_layers=0,
-                top_k=10,
+                top_k=40,
                 top_p=0.95,
                 temperature=0.7
             )
