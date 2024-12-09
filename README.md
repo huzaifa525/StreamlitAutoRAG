@@ -38,8 +38,8 @@ streamlit run app.py
 
 ## Models Used
 
-- LLM: Llama 2 7B (4-bit quantized)
-- Embeddings: all-MiniLM-L6-v2
+- LLM: 
+- Embeddings: intel dynamic_tinybert
 
 ## System Requirements
 
