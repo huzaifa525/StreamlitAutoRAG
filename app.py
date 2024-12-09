@@ -131,7 +131,7 @@ class LocalAutoRAGOptimizer:
         self.chunk_sizes = [512, 768, 1024]
         self.overlap_sizes = [50, 100, 150]
         
-        self.embedding_model = "Intel/dynamic-tinybert"
+        self.embedding_model = "Intel/dynamic_tinybert"
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.embedding_model,
             model_kwargs={
