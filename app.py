@@ -2,7 +2,9 @@ import streamlit as st
 from ctransformers import AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.schema import Document
 import torch
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -144,6 +146,11 @@ class LocalAutoRAGOptimizer:
         self.embedding_model = "all-MiniLM-L6-v2"
         self.chunk_sizes = [256, 512, 1024]
         self.overlap_sizes = [0, 50, 100]
+        
+        # Initialize Hugging Face embeddings for LangChain
+        self.embeddings = HuggingFaceEmbeddings(model_name=self.embedding_model)
+        
+        # Initialize sentence transformer for coherence scoring
         self.encoder = SentenceTransformer(self.embedding_model)
         
     def evaluate_chunks(self, text: str, chunk_size: int, overlap: int) -> float:
@@ -207,19 +214,18 @@ class LocalAutoRAGSystem:
             chunk_size=chunk_size,
             chunk_overlap=overlap
         )
-        splits = splitter.create_documents([text])
         
-        # Create embeddings and vectorstore
-        self.vectorstore = FAISS.from_documents(
-            splits,
-            self.optimizer.encoder
-        )
+        # Create documents
+        docs = [Document(page_content=chunk) for chunk in splitter.split_text(text)]
+        
+        # Create vectorstore using HuggingFace embeddings
+        self.vectorstore = FAISS.from_documents(docs, self.optimizer.embeddings)
         
         return {
             "chunk_size": chunk_size,
             "overlap": overlap,
             "embedding_model": self.optimizer.embedding_model,
-            "num_chunks": len(splits)
+            "num_chunks": len(docs)
         }
     
     def query(self, question: str, num_chunks: int = 3) -> str:
