@@ -1,9 +1,9 @@
 import streamlit as st
-from llama_cpp import Llama
+from ctransformers import AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader, TextLoader
 from langchain.vectorstores import FAISS
+from langchain.document_loaders import PyPDFLoader, TextLoader
 import torch
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -14,6 +14,13 @@ from tqdm import tqdm
 
 class ModelManager:
     """Handles downloading and loading of models"""
+    
+    MODELS = {
+        "tiny": {
+            "name": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
+            "url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+        }
+    }
     
     @staticmethod
     def download_model(url: str, save_path: str):
@@ -33,12 +40,17 @@ class ModelManager:
                 progress.update(size)
 
     @staticmethod
-    def ensure_model_exists(model_path: str, model_url: str):
+    def ensure_model_exists(model_name: str = "tiny") -> str:
         """Check if model exists, download if not"""
+        model_info = ModelManager.MODELS[model_name]
+        model_path = f"models/{model_name}.gguf"
+        
         if not os.path.exists(model_path):
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
-            st.info(f"Downloading model to {model_path}...")
-            ModelManager.download_model(model_url, model_path)
+            st.info(f"Downloading {model_name} model...")
+            ModelManager.download_model(model_info["url"], model_path)
+            
+        return model_path
 
 class LocalAutoRAGOptimizer:
     def __init__(self):
@@ -94,10 +106,12 @@ class LocalAutoRAGSystem:
         self.vectorstore = None
         
         # Initialize local LLM
-        self.llm = Llama(
-            model_path=model_path,
-            n_ctx=2048,  # Context window
-            n_threads=4   # Adjust based on CPU
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            model_type="llama",
+            max_new_tokens=512,
+            context_length=2048,
+            gpu_layers=0  # CPU only
         )
         
     def process_document(self, file_path: str):
@@ -123,13 +137,9 @@ class LocalAutoRAGSystem:
         splits = splitter.split_documents(document)
         
         # Create embeddings and vectorstore
-        encoder = SentenceTransformer(self.optimizer.embedding_model)
-        embeddings = splits[0].page_content
-        
-        # Create FAISS index
         self.vectorstore = FAISS.from_documents(
             splits,
-            encoder.encode
+            self.optimizer.encoder
         )
         
         return {
@@ -149,7 +159,7 @@ class LocalAutoRAGSystem:
         context = "\n".join([doc.page_content for doc in relevant_docs])
         
         # Create prompt
-        prompt = f"""Use the following context to answer the question. If you cannot find the answer in the context, say "I cannot find the answer in the provided context."
+        prompt = f"""Based on the following context, answer the question. If you cannot find the answer in the context, say "I cannot find the answer in the provided context."
 
 Context:
 {context}
@@ -159,27 +169,18 @@ Question: {question}
 Answer: """
         
         # Generate response using local LLM
-        response = self.llm(
-            prompt,
-            max_tokens=512,
-            temperature=0.7,
-            top_p=0.95,
-            repeat_penalty=1.1
-        )
+        response = self.llm(prompt)
         
-        return response['choices'][0]['text'].strip()
+        return response.strip()
 
 # Streamlit Interface
 def main():
     st.title("📚 Local AutoRAG Document QA System")
     
     # Model setup
-    model_path = "models/llama-2-7b-chat.Q4_K_M.gguf"  # Quantized model for CPU
-    model_url = "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf"
-    
-    # Ensure model exists
     try:
-        ModelManager.ensure_model_exists(model_path, model_url)
+        model_path = ModelManager.ensure_model_exists()
+        st.success("Local LLM loaded successfully!")
     except Exception as e:
         st.error(f"Error downloading model: {str(e)}")
         return
@@ -187,7 +188,6 @@ def main():
     # Initialize AutoRAG system
     try:
         autorag = LocalAutoRAGSystem(model_path)
-        st.success("Local LLM loaded successfully!")
     except Exception as e:
         st.error(f"Error initializing LLM: {str(e)}")
         return
