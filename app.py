@@ -228,7 +228,7 @@ class LocalAutoRAGSystem:
             "num_chunks": len(docs)
         }
     
-    def query(self, question: str, num_chunks: int = 3) -> str:
+    def query(self, question: str, num_chunks: int = 5) -> str:
         """Query the document with local LLM."""
         if not self.vectorstore:
             return "Please process a document first."
@@ -238,14 +238,23 @@ class LocalAutoRAGSystem:
         context = "\n".join([doc.page_content for doc in relevant_docs])
         
         # Create prompt
-        prompt = f"""Based on the following context, answer the question. If you cannot find the answer in the context, say "I cannot find the answer in the provided context."
+        prompt = f"""You are a helpful AI assistant. Using the provided context, answer the user's question comprehensively and accurately. If the information cannot be found in the context, say "I cannot find the answer in the provided context."
+
+Some guidelines:
+- Synthesize information from multiple chunks if needed
+- Provide complete, well-structured answers
+- Stay focused on the question asked
+- Use your own words to explain clearly
+- If asked for a summary, provide key points in a coherent manner
+- Cite specific details from the context when relevant
 
 Context:
 {context}
 
 Question: {question}
 
-Answer: """
+Please provide a clear and complete answer:
+"""
         
         # Generate response using local LLM
         response = self.llm(prompt)
