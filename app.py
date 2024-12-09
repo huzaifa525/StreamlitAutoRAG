@@ -91,9 +91,9 @@ class DocumentProcessor:
 
 class ModelManager:
     MODELS = {
-        "Smollm2": {
+        "smollm": {
             "name": "HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF",
-            "url": "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/blob/main/smollm2-1.7b-instruct-q4_k_m.gguf"
+            "url": "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf"
         }
     }
     
@@ -115,7 +115,7 @@ class ModelManager:
                 progress.update(size)
 
     @staticmethod
-    def ensure_model_exists(model_name: str = "Smollm2") -> str:
+    def ensure_model_exists(model_name: str = "smollm") -> str:
         model_info = ModelManager.MODELS[model_name]
         model_path = f"models/{model_name}.gguf"
         
@@ -187,8 +187,8 @@ class LocalAutoRAGSystem:
             # Removed token parameter from model initialization
             self.llm = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                model_type="Smollm2",
-                max_new_tokens=1024,  # Increased for Smollm2
+                model_type="deepseek",
+                max_new_tokens=1024,  # Increased for DeepSeek
                 context_length=4096,  # Increased context window
                 gpu_layers=0,
                 top_k=10,
